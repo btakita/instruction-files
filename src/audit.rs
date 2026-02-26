@@ -122,7 +122,7 @@ pub fn check_tree_paths(rel: &str, content: &str, root: &Path) -> Vec<Issue> {
 /// Check combined line count against budget.
 ///
 /// Only counts agent instruction files (AGENTS.md, SKILL.md, optionally CLAUDE.md).
-/// Reference docs (README.md, SPECS.md) are listed but excluded from the budget.
+/// Reference docs (README.md, SPEC.md) are listed but excluded from the budget.
 pub fn check_line_budget(
     files: &[PathBuf],
     root: &Path,
@@ -675,11 +675,11 @@ src/
         let root = tmp.path();
         fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
         let big_spec = "line\n".repeat(2000);
-        fs::write(root.join("SPECS.md"), &big_spec).unwrap();
+        fs::write(root.join("SPEC.md"), &big_spec).unwrap();
         fs::write(root.join("README.md"), "readme\n").unwrap();
 
         let config = AuditConfig::corky();
-        let files = vec![root.join("AGENTS.md"), root.join("SPECS.md"), root.join("README.md")];
+        let files = vec![root.join("AGENTS.md"), root.join("SPEC.md"), root.join("README.md")];
         let (issues, counts, total) = check_line_budget(&files, root, &config);
         // Only AGENTS.md counts toward budget (2 lines)
         assert_eq!(total, 2);
