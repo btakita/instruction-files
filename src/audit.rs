@@ -120,9 +120,13 @@ pub fn check_tree_paths(rel: &str, content: &str, root: &Path) -> Vec<Issue> {
 }
 
 /// Check combined line count against budget.
+///
+/// Only counts agent instruction files (AGENTS.md, SKILL.md, optionally CLAUDE.md).
+/// Reference docs (README.md, SPECS.md) are listed but excluded from the budget.
 pub fn check_line_budget(
     files: &[PathBuf],
     root: &Path,
+    config: &AuditConfig,
 ) -> (Vec<Issue>, Vec<(String, usize)>, usize) {
     let mut counts = Vec::new();
     let mut total = 0;
@@ -130,8 +134,10 @@ pub fn check_line_budget(
         if let Ok(content) = std::fs::read_to_string(f) {
             let n = content.lines().count();
             let rel = f.strip_prefix(root).unwrap_or(f).to_string_lossy().to_string();
+            if is_agent_file(&rel, config) {
+                total += n;
+            }
             counts.push((rel, n));
-            total += n;
         }
     }
     let mut issues = Vec::new();
@@ -622,14 +628,15 @@ src/
     fn check_line_budget_under() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        fs::write(root.join("A.md"), "line1\nline2\nline3\n").unwrap();
+        fs::write(root.join("AGENTS.md"), "line1\nline2\nline3\n").unwrap();
 
-        let files = vec![root.join("A.md")];
-        let (issues, counts, total) = check_line_budget(&files, root);
+        let config = AuditConfig::corky();
+        let files = vec![root.join("AGENTS.md")];
+        let (issues, counts, total) = check_line_budget(&files, root, &config);
         assert!(issues.is_empty());
         assert_eq!(total, 3);
         assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].0, "A.md");
+        assert_eq!(counts[0].0, "AGENTS.md");
         assert_eq!(counts[0].1, 3);
     }
 
@@ -638,10 +645,11 @@ src/
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let content = "line\n".repeat(1001);
-        fs::write(root.join("BIG.md"), &content).unwrap();
+        fs::write(root.join("AGENTS.md"), &content).unwrap();
 
-        let files = vec![root.join("BIG.md")];
-        let (issues, _, total) = check_line_budget(&files, root);
+        let config = AuditConfig::corky();
+        let files = vec![root.join("AGENTS.md")];
+        let (issues, _, total) = check_line_budget(&files, root, &config);
         assert_eq!(total, 1001);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].message.contains("Over line budget"));
@@ -651,13 +659,33 @@ src/
     fn check_line_budget_multiple_files() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        fs::write(root.join("A.md"), "a\nb\n").unwrap();
-        fs::write(root.join("B.md"), "c\nd\ne\n").unwrap();
+        fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
+        fs::write(root.join("SKILL.md"), "c\nd\ne\n").unwrap();
 
-        let files = vec![root.join("A.md"), root.join("B.md")];
-        let (_, counts, total) = check_line_budget(&files, root);
+        let config = AuditConfig::corky();
+        let files = vec![root.join("AGENTS.md"), root.join("SKILL.md")];
+        let (_, counts, total) = check_line_budget(&files, root, &config);
         assert_eq!(total, 5);
         assert_eq!(counts.len(), 2);
+    }
+
+    #[test]
+    fn check_line_budget_excludes_non_agent_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
+        let big_spec = "line\n".repeat(2000);
+        fs::write(root.join("SPECS.md"), &big_spec).unwrap();
+        fs::write(root.join("README.md"), "readme\n").unwrap();
+
+        let config = AuditConfig::corky();
+        let files = vec![root.join("AGENTS.md"), root.join("SPECS.md"), root.join("README.md")];
+        let (issues, counts, total) = check_line_budget(&files, root, &config);
+        // Only AGENTS.md counts toward budget (2 lines)
+        assert_eq!(total, 2);
+        assert!(issues.is_empty());
+        // All files listed in counts
+        assert_eq!(counts.len(), 3);
     }
 
     // --- check_staleness ---
