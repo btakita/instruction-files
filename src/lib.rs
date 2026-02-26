@@ -36,7 +36,7 @@ pub fn run(config: &AuditConfig, root_override: Option<&Path>) -> Result<()> {
         }
     }
 
-    let (budget_issues, counts, total) = check_line_budget(&files, &root);
+    let (budget_issues, counts, total) = check_line_budget(&files, &root, config);
     issues.extend(budget_issues);
     issues.extend(check_staleness(&files, &root, config));
 

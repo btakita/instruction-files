@@ -46,11 +46,11 @@ pub fn find_root(config: &AuditConfig) -> PathBuf {
 /// Discover all instruction files under the given root.
 ///
 /// Searches for:
-/// - Root-level: AGENTS.md, README.md, and optionally CLAUDE.md
+/// - Root-level: AGENTS.md, README.md, SPECS.md, and optionally CLAUDE.md
 /// - Glob patterns: .claude/**/SKILL.md, .agents/**/SKILL.md, .agents/**/AGENTS.md, src/**/AGENTS.md
 /// - If `config.include_claude_md`: also .claude/**/CLAUDE.md, src/**/CLAUDE.md
 pub fn find_instruction_files(root: &Path, config: &AuditConfig) -> Vec<PathBuf> {
-    let mut root_patterns = vec!["AGENTS.md", "README.md"];
+    let mut root_patterns = vec!["AGENTS.md", "README.md", "SPECS.md"];
     if config.include_claude_md {
         root_patterns.push("CLAUDE.md");
     }
@@ -186,6 +186,19 @@ mod tests {
         let files = find_instruction_files(root, &config);
         let names: Vec<_> = files.iter().map(|f| f.file_name().unwrap()).collect();
         assert!(names.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn find_instruction_files_discovers_specs_md() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("SPECS.md"), "# Spec").unwrap();
+        fs::write(root.join("AGENTS.md"), "# Agents").unwrap();
+
+        let config = AuditConfig::corky();
+        let files = find_instruction_files(root, &config);
+        assert!(files.iter().any(|f| f.ends_with("SPECS.md")));
+        assert_eq!(files.len(), 2);
     }
 
     #[test]
