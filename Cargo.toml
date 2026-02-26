@@ -1,6 +1,6 @@
 [package]
 name = "instruction-files"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Discovery, auditing, and sync for AGENTS.md/CLAUDE.md instruction files"
 license = "MIT"
