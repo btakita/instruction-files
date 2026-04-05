@@ -5,6 +5,8 @@ mod discovery;
 pub use agent_runbooks as runbooks;
 #[cfg(feature = "ontology")]
 pub mod ontology;
+#[cfg(feature = "spec-audit")]
+pub mod spec_audit;
 mod types;
 
 pub use audit::{
