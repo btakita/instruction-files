@@ -21,6 +21,10 @@ enum Commands {
         /// Use broad config (many languages, many root markers)
         #[arg(long, default_value_t = true)]
         broad: bool,
+
+        /// Ontology directory for validating [term:Name] annotations (requires ontology feature)
+        #[arg(long)]
+        ontology_dir: Option<PathBuf>,
     },
 
     /// Initialize .agent/runbooks/ with bundled defaults
@@ -42,9 +46,22 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Audit { root, broad: _ } => {
+        Commands::Audit {
+            root,
+            broad: _,
+            ontology_dir,
+        } => {
             let config = AuditConfig::agent_doc();
-            instruction_files::run(&config, root.as_deref())?;
+            #[cfg(feature = "ontology")]
+            {
+                let _ = &ontology_dir;
+                instruction_files::run(&config, root.as_deref(), ontology_dir.as_deref())?;
+            }
+            #[cfg(not(feature = "ontology"))]
+            {
+                let _ = &ontology_dir;
+                instruction_files::run(&config, root.as_deref())?;
+            }
         }
         Commands::Init { root } => {
             let root = root.unwrap_or_else(|| PathBuf::from("."));

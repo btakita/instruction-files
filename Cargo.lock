@@ -274,6 +274,7 @@ dependencies = [
  "agent-rules",
  "agent-runbooks",
  "anyhow",
+ "clap",
  "existence",
  "glob",
  "module-harness",

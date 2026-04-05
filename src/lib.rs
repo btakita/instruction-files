@@ -3,6 +3,8 @@
 mod audit;
 mod discovery;
 pub use agent_runbooks as runbooks;
+#[cfg(feature = "ontology")]
+pub mod ontology;
 mod types;
 
 pub use audit::{
@@ -10,6 +12,8 @@ pub use audit::{
     check_tree_paths,
 };
 pub use discovery::{find_instruction_files, find_root};
+#[cfg(feature = "ontology")]
+pub use ontology::check_ontology_terms;
 pub use runbooks::init_runbooks;
 pub use types::{AuditConfig, Issue, is_agent_file};
 
@@ -20,7 +24,15 @@ use std::path::Path;
 /// Run the full audit with the given configuration.
 ///
 /// Returns `Ok(())` on success, calls `std::process::exit(1)` on issues found.
-pub fn run(config: &AuditConfig, root_override: Option<&Path>) -> Result<()> {
+///
+/// When the `ontology` feature is enabled and `ontology_dir` is provided,
+/// instruction files are also scanned for `[term:Name]` annotations and
+/// each term is verified against the ontology directory.
+pub fn run(
+    config: &AuditConfig,
+    root_override: Option<&Path>,
+    #[cfg(feature = "ontology")] ontology_dir: Option<&Path>,
+) -> Result<()> {
     println!("Auditing docs...\n");
 
     let root = match root_override {
@@ -40,6 +52,10 @@ pub fn run(config: &AuditConfig, root_override: Option<&Path>) -> Result<()> {
             issues.extend(check_tree_paths(&rel, &content, &root));
             issues.extend(check_actionable(&rel, &content, config));
             issues.extend(check_context_invariant(&rel, &content, config));
+            #[cfg(feature = "ontology")]
+            if let Some(onto_dir) = ontology_dir {
+                issues.extend(check_ontology_terms(&rel, &content, onto_dir));
+            }
         }
     }
 
