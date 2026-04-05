@@ -2,12 +2,18 @@
 
 mod audit;
 mod discovery;
+pub mod runbooks;
 mod types;
 
-pub use audit::{check_actionable, check_line_budget, check_staleness, check_tree_paths};
+pub use audit::{
+    check_actionable, check_context_invariant, check_line_budget, check_staleness,
+    check_tree_paths,
+};
 pub use discovery::{find_instruction_files, find_root};
-pub use types::{AuditConfig, Issue};
+pub use runbooks::init_runbooks;
+pub use types::{AuditConfig, Issue, is_agent_file};
 
+use agent_kit::audit_common::LINE_BUDGET;
 use anyhow::Result;
 use std::path::Path;
 
@@ -33,6 +39,7 @@ pub fn run(config: &AuditConfig, root_override: Option<&Path>) -> Result<()> {
         if let Ok(content) = std::fs::read_to_string(doc) {
             issues.extend(check_tree_paths(&rel, &content, &root));
             issues.extend(check_actionable(&rel, &content, config));
+            issues.extend(check_context_invariant(&rel, &content, config));
         }
     }
 
@@ -76,5 +83,3 @@ pub fn run(config: &AuditConfig, root_override: Option<&Path>) -> Result<()> {
 
     Ok(())
 }
-
-const LINE_BUDGET: usize = 1000;

@@ -1,9 +1,15 @@
 //! Audit checks for instruction files.
+//!
+//! Cross-cutting checks (check_context_invariant, check_staleness, check_line_budget)
+//! are re-exported from `agent-kit::audit_common`. Domain-specific checks
+//! (check_actionable, check_tree_paths) remain here.
+
+pub use agent_kit::audit_common::{check_context_invariant, check_line_budget, check_staleness};
 
 use crate::types::{is_agent_file, AuditConfig, Issue};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 static SKIP_PATHS: Lazy<std::collections::HashSet<&str>> =
     Lazy::new(|| [".env"].iter().copied().collect());
@@ -119,127 +125,7 @@ pub fn check_tree_paths(rel: &str, content: &str, root: &Path) -> Vec<Issue> {
     issues
 }
 
-/// Check combined line count against budget.
-///
-/// Only counts agent instruction files (AGENTS.md, SKILL.md, optionally CLAUDE.md).
-/// Reference docs (README.md, SPEC.md) are listed but excluded from the budget.
-pub fn check_line_budget(
-    files: &[PathBuf],
-    root: &Path,
-    config: &AuditConfig,
-) -> (Vec<Issue>, Vec<(String, usize)>, usize) {
-    let mut counts = Vec::new();
-    let mut total = 0;
-    for f in files {
-        if let Ok(content) = std::fs::read_to_string(f) {
-            let n = content.lines().count();
-            let rel = f.strip_prefix(root).unwrap_or(f).to_string_lossy().to_string();
-            if is_agent_file(&rel, config) {
-                total += n;
-            }
-            counts.push((rel, n));
-        }
-    }
-    let mut issues = Vec::new();
-    if total > crate::LINE_BUDGET {
-        issues.push(Issue {
-            file: "(all)".to_string(),
-            line: 0,
-            end_line: 0,
-            message: format!(
-                "Over line budget: {} lines (max {})",
-                total,
-                crate::LINE_BUDGET
-            ),
-            warning: false,
-        });
-    }
-    (issues, counts, total)
-}
-
-/// Check if instruction files are older than source code.
-pub fn check_staleness(files: &[PathBuf], root: &Path, config: &AuditConfig) -> Vec<Issue> {
-    let mut newest_mtime = std::time::SystemTime::UNIX_EPOCH;
-    let mut newest_src = PathBuf::new();
-
-    fn scan_sources(
-        dir: &Path,
-        extensions: &[&str],
-        skip_dirs: &[&str],
-        newest: &mut std::time::SystemTime,
-        newest_path: &mut PathBuf,
-    ) {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if skip_dirs.contains(&name) {
-                            continue;
-                        }
-                    }
-                    scan_sources(&path, extensions, skip_dirs, newest, newest_path);
-                } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if extensions.contains(&ext) {
-                        if let Ok(meta) = path.metadata() {
-                            if let Ok(mtime) = meta.modified() {
-                                if mtime > *newest {
-                                    *newest = mtime;
-                                    *newest_path = path;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut found_any = false;
-    for source_dir in &config.source_dirs {
-        let dir = root.join(source_dir);
-        if dir.exists() {
-            found_any = true;
-            scan_sources(
-                &dir,
-                &config.source_extensions,
-                &config.skip_dirs,
-                &mut newest_mtime,
-                &mut newest_src,
-            );
-        }
-    }
-
-    if !found_any {
-        return vec![];
-    }
-
-    let mut issues = Vec::new();
-    for doc in files {
-        if let Ok(meta) = doc.metadata() {
-            if let Ok(doc_mtime) = meta.modified() {
-                if doc_mtime < newest_mtime {
-                    let rel = doc.strip_prefix(root).unwrap_or(doc).to_string_lossy().to_string();
-                    let src_rel = newest_src
-                        .strip_prefix(root)
-                        .unwrap_or(&newest_src)
-                        .to_string_lossy()
-                        .to_string();
-                    issues.push(Issue {
-                        file: rel,
-                        line: 0,
-                        end_line: 0,
-                        message: format!("Older than {} \u{2014} may be stale", src_rel),
-                        warning: false,
-                    });
-                }
-            }
-        }
-    }
-    issues
-}
-
-/// Return the heading level (1–6) and title text for a markdown heading line.
+/// Return the heading level (1-6) and title text for a markdown heading line.
 fn heading_level(line: &str) -> Option<(usize, &str)> {
     let hashes = line.bytes().take_while(|&b| b == b'#').count();
     if hashes == 0 || hashes > 6 {
@@ -286,11 +172,11 @@ pub fn check_actionable(rel: &str, content: &str, config: &AuditConfig) -> Vec<I
             if INFORMATIONAL_HEADINGS.iter().any(|h| title_lower == *h) {
                 let mut end = lines.len();
                 for (j, line_j) in lines.iter().enumerate().skip(i + 1) {
-                    if let Some((next_level, _)) = heading_level(line_j) {
-                        if next_level <= level {
-                            end = j;
-                            break;
-                        }
+                    if let Some((next_level, _)) = heading_level(line_j)
+                        && next_level <= level
+                    {
+                        end = j;
+                        break;
                     }
                 }
                 while end > i + 1 && lines[end - 1].trim().is_empty() {
@@ -619,119 +505,6 @@ src/
 ```
 ";
         let issues = check_tree_paths("CLAUDE.md", content, root);
-        assert!(issues.is_empty());
-    }
-
-    // --- check_line_budget ---
-
-    #[test]
-    fn check_line_budget_under() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("AGENTS.md"), "line1\nline2\nline3\n").unwrap();
-
-        let config = AuditConfig::corky();
-        let files = vec![root.join("AGENTS.md")];
-        let (issues, counts, total) = check_line_budget(&files, root, &config);
-        assert!(issues.is_empty());
-        assert_eq!(total, 3);
-        assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].0, "AGENTS.md");
-        assert_eq!(counts[0].1, 3);
-    }
-
-    #[test]
-    fn check_line_budget_over() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let content = "line\n".repeat(1001);
-        fs::write(root.join("AGENTS.md"), &content).unwrap();
-
-        let config = AuditConfig::corky();
-        let files = vec![root.join("AGENTS.md")];
-        let (issues, _, total) = check_line_budget(&files, root, &config);
-        assert_eq!(total, 1001);
-        assert_eq!(issues.len(), 1);
-        assert!(issues[0].message.contains("Over line budget"));
-    }
-
-    #[test]
-    fn check_line_budget_multiple_files() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
-        fs::write(root.join("SKILL.md"), "c\nd\ne\n").unwrap();
-
-        let config = AuditConfig::corky();
-        let files = vec![root.join("AGENTS.md"), root.join("SKILL.md")];
-        let (_, counts, total) = check_line_budget(&files, root, &config);
-        assert_eq!(total, 5);
-        assert_eq!(counts.len(), 2);
-    }
-
-    #[test]
-    fn check_line_budget_excludes_non_agent_files() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
-        let big_spec = "line\n".repeat(2000);
-        fs::write(root.join("SPEC.md"), &big_spec).unwrap();
-        fs::write(root.join("README.md"), "readme\n").unwrap();
-
-        let config = AuditConfig::corky();
-        let files = vec![root.join("AGENTS.md"), root.join("SPEC.md"), root.join("README.md")];
-        let (issues, counts, total) = check_line_budget(&files, root, &config);
-        // Only AGENTS.md counts toward budget (2 lines)
-        assert_eq!(total, 2);
-        assert!(issues.is_empty());
-        // All files listed in counts
-        assert_eq!(counts.len(), 3);
-    }
-
-    // --- check_staleness ---
-
-    #[test]
-    fn check_staleness_doc_newer_than_src() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let src = root.join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("main.rs"), "fn main() {}").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        fs::write(root.join("CLAUDE.md"), "# Doc").unwrap();
-
-        let config = AuditConfig::agent_doc();
-        let files = vec![root.join("CLAUDE.md")];
-        let issues = check_staleness(&files, root, &config);
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn check_staleness_doc_older_than_src() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let src = root.join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(root.join("CLAUDE.md"), "# Doc").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        fs::write(src.join("main.rs"), "fn main() {}").unwrap();
-
-        let config = AuditConfig::agent_doc();
-        let files = vec![root.join("CLAUDE.md")];
-        let issues = check_staleness(&files, root, &config);
-        assert_eq!(issues.len(), 1);
-        assert!(issues[0].message.contains("may be stale"));
-    }
-
-    #[test]
-    fn check_staleness_no_src_dir() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        fs::write(root.join("CLAUDE.md"), "# Doc").unwrap();
-
-        let config = AuditConfig::agent_doc();
-        let files = vec![root.join("CLAUDE.md")];
-        let issues = check_staleness(&files, root, &config);
         assert!(issues.is_empty());
     }
 
