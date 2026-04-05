@@ -8,6 +8,8 @@ repository = "https://github.com/btakita/instruction-files"
 
 [dependencies]
 agent-kit = { version = "0.3", path = "../agent-kit" }
+agent-rules = { version = "0.1", path = "../agent-rules" }
+agent-runbooks = { version = "0.1", path = "../agent-runbooks" }
 anyhow = "1"
 glob = "0.3"
 regex = "1"
