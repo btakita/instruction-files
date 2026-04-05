@@ -2,7 +2,7 @@
 
 mod audit;
 mod discovery;
-pub mod runbooks;
+pub use agent_runbooks as runbooks;
 mod types;
 
 pub use audit::{
