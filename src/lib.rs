@@ -20,8 +20,43 @@ pub use runbooks::init_runbooks;
 pub use types::{AuditConfig, Issue, is_agent_file};
 
 use agent_kit::audit_common::LINE_BUDGET;
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+
+/// Bundled SKILL.md content for the instruction-files skill.
+const BUNDLED_SKILL: &str = include_str!("../.claude/skills/instruction-files/SKILL.md");
+
+/// Initialize instruction-files in a project.
+///
+/// Installs the bundled SKILL.md and scaffolds default runbooks.
+/// Safe to call repeatedly — never overwrites existing files.
+///
+/// Returns the paths of files written.
+pub fn init(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut written = Vec::new();
+
+    // Install SKILL.md
+    let env = agent_kit::detect::Environment::detect();
+    let skill_path = env.skill_path("instruction-files", Some(root));
+    if !skill_path.exists() {
+        if let Some(parent) = skill_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::write(&skill_path, BUNDLED_SKILL)
+            .with_context(|| format!("failed to write {}", skill_path.display()))?;
+        written.push(skill_path);
+    }
+
+    // Scaffold default runbooks
+    let n = init_runbooks(root)?;
+    if n > 0 {
+        let runbooks_dir = root.join(".agent/runbooks");
+        written.push(runbooks_dir);
+    }
+
+    Ok(written)
+}
 
 /// Run the full audit with the given configuration.
 ///

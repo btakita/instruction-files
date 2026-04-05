@@ -65,11 +65,14 @@ fn main() -> Result<()> {
         }
         Commands::Init { root } => {
             let root = root.unwrap_or_else(|| PathBuf::from("."));
-            let written = instruction_files::init_runbooks(&root)?;
-            if written > 0 {
-                eprintln!("Initialized {written} runbook(s) in .agent/runbooks/");
+            let written = instruction_files::init(&root)?;
+            if written.is_empty() {
+                eprintln!("Already initialized.");
             } else {
-                eprintln!("Runbooks already initialized.");
+                for path in &written {
+                    eprintln!("  Installed: {}", path.display());
+                }
+                eprintln!("Initialized {} item(s).", written.len());
             }
         }
         Commands::List { root } => {
