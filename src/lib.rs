@@ -35,9 +35,8 @@ const BUNDLED_SKILL: &str = include_str!("../.claude/skills/instruction-files/SK
 pub fn init(root: &Path) -> Result<Vec<PathBuf>> {
     let mut written = Vec::new();
 
-    // Install SKILL.md
-    let env = agent_kit::detect::Environment::detect();
-    let skill_path = env.skill_path("instruction-files", Some(root));
+    // Install SKILL.md — always target Claude Code paths since skills are Claude Code only
+    let skill_path = agent_kit::detect::Environment::ClaudeCode.skill_path("instruction-files", Some(root));
     if !skill_path.exists() {
         if let Some(parent) = skill_path.parent() {
             std::fs::create_dir_all(parent)
