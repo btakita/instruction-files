@@ -4,8 +4,110 @@
 //! are re-exported from `agent-kit::audit_common`. Domain-specific checks
 //! (check_actionable, check_tree_paths) are re-exported from `agent-rules`.
 
+use crate::types::Issue;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::path::Path;
+
 pub use agent_kit::audit_common::{check_context_invariant, check_line_budget, check_staleness};
 pub use agent_rules::{check_actionable, check_tree_paths};
+
+/// Regex matching markdown links whose target ends with `LIBRARY_CONTEXT_POLICY.md`.
+static POLICY_LINK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\[([^\]]*)\]\(([^)]*LIBRARY_CONTEXT_POLICY\.md[^)]*)\)|(?m)^((?:https?://|\.\.?/)[^\s]*LIBRARY_CONTEXT_POLICY\.md)\s*$").unwrap()
+});
+
+/// Check that a library AGENTS.md contains a `## Library Context Policy` section
+/// with a resolvable link to `LIBRARY_CONTEXT_POLICY.md`.
+///
+/// Only applies to AGENTS.md files in subdirectories (not the project root).
+pub fn check_library_context_policy(rel: &str, content: &str, root: &Path) -> Vec<Issue> {
+    // Only check AGENTS.md files in subdirectories
+    let path = std::path::Path::new(rel);
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name != "AGENTS.md" {
+        return vec![];
+    }
+    // Skip root-level AGENTS.md
+    let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+    if parent.is_empty() {
+        return vec![];
+    }
+
+    let mut issues = Vec::new();
+
+    // Find the ## Library Context Policy section
+    let mut section_line = 0;
+    let mut in_section = false;
+    let mut section_content = String::new();
+
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == "## Library Context Policy" {
+            section_line = i + 1;
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            // Stop at next ## heading
+            if trimmed.starts_with("## ") {
+                break;
+            }
+            section_content.push_str(line);
+            section_content.push('\n');
+        }
+    }
+
+    if section_line == 0 {
+        issues.push(Issue {
+            file: rel.to_string(),
+            line: 0,
+            end_line: 0,
+            message: "Missing required '## Library Context Policy' section".to_string(),
+            warning: false,
+        });
+        return issues;
+    }
+
+    // Check for a link to LIBRARY_CONTEXT_POLICY.md
+    if let Some(caps) = POLICY_LINK_RE.captures(&section_content) {
+        // Extract the URL (group 2 for markdown links, group 3 for bare URLs)
+        let url = caps.get(2).or_else(|| caps.get(3)).map(|m| m.as_str()).unwrap_or("");
+
+        // Validate link resolves
+        if url.starts_with("http://") || url.starts_with("https://") {
+            // Accept any URL containing LIBRARY_CONTEXT_POLICY.md
+        } else {
+            // Relative path — resolve from the AGENTS.md file's directory
+            let agents_dir = root.join(parent);
+            let resolved = agents_dir.join(url);
+            if !resolved.exists() {
+                issues.push(Issue {
+                    file: rel.to_string(),
+                    line: section_line,
+                    end_line: 0,
+                    message: format!(
+                        "Library Context Policy link '{}' does not resolve (expected at {})",
+                        url,
+                        resolved.display()
+                    ),
+                    warning: false,
+                });
+            }
+        }
+    } else {
+        issues.push(Issue {
+            file: rel.to_string(),
+            line: section_line,
+            end_line: 0,
+            message: "Library Context Policy section has no link to LIBRARY_CONTEXT_POLICY.md"
+                .to_string(),
+            warning: false,
+        });
+    }
+
+    issues
+}
 
 #[cfg(test)]
 mod tests {
@@ -331,6 +433,146 @@ src/
         assert_eq!(issues.len(), 1);
         assert!(issues[0].message.contains("Link-heavy list"));
         assert!(issues[0].warning);
+    }
+
+    // --- check_library_context_policy ---
+
+    #[test]
+    fn library_context_policy_missing_section() {
+        let tmp = TempDir::new().unwrap();
+        let content = "# My Library\n\nSome content.\n";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, tmp.path());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("Missing required"));
+        assert!(!issues[0].warning);
+    }
+
+    #[test]
+    fn library_context_policy_missing_link() {
+        let tmp = TempDir::new().unwrap();
+        let content = "# My Library\n\n## Library Context Policy\n\nSome text without a link.\n";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, tmp.path());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("no link"));
+    }
+
+    #[test]
+    fn library_context_policy_valid_relative_link() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("src/mylib")).unwrap();
+        fs::create_dir_all(root.join("src/instruction-files")).unwrap();
+        fs::write(
+            root.join("src/instruction-files/LIBRARY_CONTEXT_POLICY.md"),
+            "policy",
+        )
+        .unwrap();
+
+        let content = "\
+# My Library
+
+## Library Context Policy
+
+This library follows the agent-loop library-context policy. Contributors
+authoring `AGENTS.md`, `SKILL.md`, or runbooks in this repo must read:
+
+[Library Context Policy](../instruction-files/LIBRARY_CONTEXT_POLICY.md)
+
+before making changes.
+";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, root);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn library_context_policy_valid_url() {
+        let tmp = TempDir::new().unwrap();
+        let content = "\
+# My Library
+
+## Library Context Policy
+
+This library follows the agent-loop library-context policy.
+
+[Policy](https://github.com/btakita/agent-loop/blob/main/src/instruction-files/LIBRARY_CONTEXT_POLICY.md)
+";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, tmp.path());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn library_context_policy_broken_relative_link() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("src/mylib")).unwrap();
+
+        let content = "\
+# My Library
+
+## Library Context Policy
+
+[Policy](../instruction-files/LIBRARY_CONTEXT_POLICY.md)
+";
+        let issues =
+            check_library_context_policy("src/mylib/AGENTS.md", content, tmp.path());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("does not resolve"));
+    }
+
+    #[test]
+    fn library_context_policy_skips_root_agents() {
+        let tmp = TempDir::new().unwrap();
+        let content = "# Root\n\nNo policy section needed.\n";
+        let issues = check_library_context_policy("AGENTS.md", content, tmp.path());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn library_context_policy_skips_non_agents() {
+        let tmp = TempDir::new().unwrap();
+        let content = "# Readme\n";
+        let issues = check_library_context_policy("src/mylib/CLAUDE.md", content, tmp.path());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn library_context_policy_bare_url() {
+        let tmp = TempDir::new().unwrap();
+        let content = "\
+# My Library
+
+## Library Context Policy
+
+This library follows the agent-loop library-context policy.
+
+https://github.com/btakita/agent-loop/blob/main/src/instruction-files/LIBRARY_CONTEXT_POLICY.md
+";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, tmp.path());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn library_context_policy_bare_relative_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("src/mylib")).unwrap();
+        fs::create_dir_all(root.join("src/instruction-files")).unwrap();
+        fs::write(
+            root.join("src/instruction-files/LIBRARY_CONTEXT_POLICY.md"),
+            "policy",
+        )
+        .unwrap();
+
+        let content = "\
+# My Library
+
+## Library Context Policy
+
+This library follows the agent-loop library-context policy.
+
+../instruction-files/LIBRARY_CONTEXT_POLICY.md
+";
+        let issues = check_library_context_policy("src/mylib/AGENTS.md", content, root);
+        assert!(issues.is_empty());
     }
 
     #[test]

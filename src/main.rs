@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use instruction_files::AuditConfig;
+use instruction_files::{AuditConfig, check_library_context_policy};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -40,6 +40,13 @@ enum Commands {
         #[arg(short, long)]
         root: Option<PathBuf>,
     },
+
+    /// Check that every library AGENTS.md has a Library Context Policy section
+    CheckPolicy {
+        /// Workspace root containing src/ with library submodules
+        #[arg(short, long)]
+        root: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -73,6 +80,51 @@ fn main() -> Result<()> {
                     eprintln!("  Installed: {}", path.display());
                 }
                 eprintln!("Initialized {} item(s).", written.len());
+            }
+        }
+        Commands::CheckPolicy { root } => {
+            let root = root
+                .map(|r| std::fs::canonicalize(&r).unwrap_or(r))
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
+            println!("Checking library context policy...\n");
+
+            // Scan for AGENTS.md files in src/ subdirectories (non-recursive)
+            // and also check nested library AGENTS.md one level deeper
+            let mut issues = Vec::new();
+            let src_dir = root.join("src");
+            if src_dir.is_dir() {
+                let mut agents_files = Vec::new();
+                // Collect AGENTS.md from src/*/AGENTS.md and src/*/*/AGENTS.md
+                for depth_pattern in &["src/*/AGENTS.md", "src/*/*/AGENTS.md"] {
+                    let pattern = root.join(depth_pattern).to_string_lossy().to_string();
+                    for path in glob::glob(&pattern).unwrap_or_else(|_| panic!("invalid glob: {}", pattern)).flatten() {
+                        agents_files.push(path);
+                    }
+                }
+                for path in agents_files {
+                    let Ok(rel) = path.strip_prefix(&root) else {
+                        continue;
+                    };
+                    let rel_str = rel.to_string_lossy().to_string();
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        issues.extend(check_library_context_policy(&rel_str, &content, &root));
+                    }
+                }
+            }
+
+            if issues.is_empty() {
+                println!("All library AGENTS.md files have valid Library Context Policy sections \u{2713}");
+            } else {
+                for issue in &issues {
+                    let marker = if issue.warning { "\u{26a0}" } else { "\u{2717}" };
+                    let mut loc = format!("  {}", issue.file);
+                    if issue.line > 0 {
+                        loc.push_str(&format!(":{}", issue.line));
+                    }
+                    println!("{:<50} {} {}", loc, marker, issue.message);
+                }
+                println!("\nFound {} issue(s)", issues.len());
+                std::process::exit(1);
             }
         }
         Commands::List { root } => {

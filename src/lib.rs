@@ -10,8 +10,8 @@ pub mod spec_audit;
 mod types;
 
 pub use audit::{
-    check_actionable, check_context_invariant, check_line_budget, check_staleness,
-    check_tree_paths,
+    check_actionable, check_context_invariant, check_library_context_policy, check_line_budget,
+    check_staleness, check_tree_paths,
 };
 pub use discovery::{find_instruction_files, find_root};
 #[cfg(feature = "ontology")]
@@ -88,6 +88,7 @@ pub fn run(
             issues.extend(check_tree_paths(&rel, &content, &root));
             issues.extend(check_actionable(&rel, &content, config));
             issues.extend(check_context_invariant(&rel, &content, config));
+            issues.extend(check_library_context_policy(&rel, &content, &root));
             #[cfg(feature = "ontology")]
             if let Some(onto_dir) = ontology_dir {
                 issues.extend(check_ontology_terms(&rel, &content, onto_dir));
